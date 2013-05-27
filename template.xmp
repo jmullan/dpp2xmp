@@ -10,7 +10,7 @@
     xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
     xmlns:stEvt="http://ns.adobe.com/xap/1.0/sType/ResourceEvent#"
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-   ##fields##
+   ##FIELDS##
   >
    <exif:ISOSpeedRatings>
     <rdf:Seq>

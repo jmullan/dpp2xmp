@@ -90,7 +90,8 @@ CRS = {
     'AlreadyApplied': {'type': bool, 'values': [False, True], 'default': False},
     'AutoLateralCA': {'type': int, 'values': [False, True], 'default': False},
     'CameraProfileDigest': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ColorNoiseReductionDetail': {'type': int, 'values': [-100, 100], 'default': 50},
+    'ColorNoiseReductionDetail': {
+        'type': int, 'values': [-100, 100], 'default': 50},
     'ConvertToGrayscale': {'type': int, 'values': [-100, 100], 'default': 0},
     'CropConstrainToWarp': {'type': int, 'values': [-100, 100], 'default': 0},
     'DefringeGreenAmount': {'type': int, 'values': [-100, 100], 'default': 0},
@@ -108,8 +109,10 @@ CRS = {
     'HueAdjustmentPurple': {'type': int, 'values': [-100, 100], 'default': 0},
     'HueAdjustmentRed': {'type': int, 'values': [-100, 100], 'default': 0},
     'HueAdjustmentYellow': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LensManualDistortionAmount': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LensProfileChromaticAberrationScale': {'type': int, 'values': [-100, 100], 'default': 0},
+    'LensManualDistortionAmount': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LensProfileChromaticAberrationScale': {
+        'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileDigest': {'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileDistortionScale': {'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileEnable': {'type': int, 'values': [-100, 100], 'default': 0},
@@ -196,16 +199,17 @@ REAL_CRS = {
 }
 
 CRS_2012 = {
-    'Blacks2012': {'type': int, 'values': [-100, 100]},
-    'Clarity2012': {'type': int, 'values': [-100, 100]},
-    'Contrast2012': {'type': int, 'values': [-100, 100]},
-    'Exposure2012': {'type': float, 'values': [-10.0, 10.0]},
-    'Highlights2012': {'type': int, 'values': [-100, 100]},
-    'Shadows2012': {'type': int, 'values': [-100, 100]},
-    'Whites2012': {'type': int, 'values': [-100, 100]},
-    'ToneCurveName2012': {'type': str, 'values': ['Linear']},
+    'Blacks2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Clarity2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Contrast2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Exposure2012': {'type': float, 'values': [-10.0, 10.0], 'default': 0},
+    'Highlights2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Shadows2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Whites2012': {'type': int, 'values': [-100, 100], 'default': 0},
+    'ToneCurveName2012': {
+        'type': str, 'values': ['Linear'], 'default': 'Linear'},
 }
-ALL_CRS = dict(REAL_CRS.items() + CRS_2012.items())
+ALL_CRS = dict(CRS.items() + REAL_CRS.items() + CRS_2012.items())
 CROP_MAPPINGS = {
     0: False,
     1: True,
@@ -264,9 +268,14 @@ def process_metadata(metadata):
                     new_key = key.replace(picture_key, 'CanonVRD:')
                     metadata[new_key] = metadata[key]
     for mapping, sources in MAPPINGS.items():
+        found = False
         for source in sources:
+            if found:
+                continue
             if source in metadata:
                 metadata['crs:' + mapping] = metadata[source]
+                found = True
+
     if 'CanonVRD:WhiteBalanceAdj' in metadata:
         metadata['crs:' + 'WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
             metadata['CanonVRD:WhiteBalanceAdj']]
@@ -275,36 +284,69 @@ def process_metadata(metadata):
             metadata['CanonVRD:CropActive']]
     return metadata
 
-def main(fileglob):
-    data = {}
-    files = glob.glob(fileglob)
-    filenames = {}
-    if not files:
-        print 'No files'
-        return
-    with exiftool.ExifTool() as et:
-        for i, filename in enumerate(files):
-            print i, filename
-            filenames[i] = filename
-            metadata = et.get_metadata(filename)
-            data[filename] = process_metadata(metadata)
-        for setting, description in ALL_CRS.items():
-            other_setting = setting.replace('2012', '')
-            if setting not in MAPPINGS:
-                LIKELY_MAPPINGS[setting] = set()
-                for metadata in data.values():
-                    for key in metadata:
-                        if setting in key:
-                            LIKELY_MAPPINGS[setting].add((key, metadata[key]))
-                        if '2012' in setting:
-                            if other_setting in key:
-                                LIKELY_MAPPINGS[setting].add(
-                                    (key, metadata[key]))
+def format_field(k, v):
+    if k not in ALL_CRS:
+        return str(v)
+    f = ALL_CRS[k]['type']
+    if f == int:
+        return int(v)
+    if f == float:
+        return float(v)
+    if f == str:
+        return str(v)
+    if f == bool:
+        if v:
+            return 'True'
+        else:
+            return False
 
-    pprint.pprint(data)
-    pprint.pprint(LIKELY_MAPPINGS)
+def metadata_to_fields(metadata):
+    lines = []
+    for k, v in metadata.items():
+        lines.append('{}="{}"'.format(k, format_field(k, v)))
+    for k, definition in ALL_CRS.items():
+        k = 'crs:' + k
+        if k in metadata:
+            continue
+        else:
+            lines.append('{}="{}"'.format(
+                k, format_field(k, definition['default'])))
+    lines = sorted(lines)
+    fields = "\r\n    ".join(lines)
+    return fields
+
+def main(fileglobs):
+    import os
+    template = open(os.path.dirname(os.path.abspath(__file__))
+                    + '/template.xmp').read()
+    with exiftool.ExifTool() as et:
+        for fileglob in fileglobs:
+            files = [x for x in glob.glob(fileglob) if x.endswith('.cr2')]
+            if not files:
+                print 'No files for glob %s' % fileglob
+                continue
+            for i, filename in enumerate(files):
+                xmp_filename = filename[0:-3] + 'xmp'
+                replace_xmp = True
+                if os.path.exists(xmp_filename):
+                    cr2_mtime = os.path.getmtime(filename)
+                    xmp_mtime = os.path.getmtime(xmp_filename)
+                    replace_xmp = cr2_mtime > xmp_mtime
+                if replace_xmp:
+                    metadata = et.get_metadata(filename)
+                    metadata = process_metadata(metadata)
+                    output = template.replace(
+                        '##FIELDS##',
+                        metadata_to_fields(metadata)
+                    )
+                    f = open(xmp_filename, 'w')
+                    f.write(output)
+                    f.close()
+
 if __name__ == '__main__':
     import sys
-    print len(sys.argv)
-    fileglob = 'tests/*.cr2'
-    main(fileglob)
+    fileglobs = sys.argv[1:]
+    if not fileglobs:
+        print 'No files specified'
+        exit(1)
+    main(fileglobs)
