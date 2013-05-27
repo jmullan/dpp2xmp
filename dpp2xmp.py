@@ -213,15 +213,13 @@ CROP_MAPPINGS = {
     'Yes': True,
 }
 MAPPINGS = {
-    'CropAngle': set([
-        'CanonVRD:AngleAdj',
-    ]),
-    'HasCrop': set([
-        'CanonVRD:CropActive',
-    ]),
-    'Saturation': set([
-        'CanonVRD:RawSaturation'
-    ]),
+    'CropAngle': set(['CanonVRD:AngleAdj',]),
+    'CropLeft': set(['CanonVRD:CropLeft']),
+    'CropRight': set(['CanonVRD:CropWidth']),
+    'CropTop': set(['CanonVRD:CropTop']),
+    'CropBottom': set(['CanonVRD:CropHeight']),
+    'HasCrop': set(['CanonVRD:CropActive',]),
+    'Saturation': set(['CanonVRD:RawSaturation']),
     'Sharpness': set([
         'CanonVRD:RawSharpness',
         'CanonVRD:SharpnessAdj',
@@ -254,44 +252,59 @@ MAPPINGS = {
     ]),
 }
 LIKELY_MAPPINGS = {}
-def main():
+
+def process_metadata(metadata):
+    picture_style = metadata.get('CanonVRD:PictureStyle')
+    if picture_style:
+        if picture_style in PICTURE_STYLES:
+            picture_style = PICTURE_STYLES[picture_style]
+            picture_key = 'CanonVRD:' + picture_style
+            for key, setting in metadata.items():
+                if key.startswith(picture_key):
+                    new_key = key.replace(picture_key, 'CanonVRD:')
+                    metadata[new_key] = metadata[key]
+    for mapping, sources in MAPPINGS.items():
+        for source in sources:
+            if source in metadata:
+                metadata['crs:' + mapping] = metadata[source]
+    if 'CanonVRD:WhiteBalanceAdj' in metadata:
+        metadata['crs:' + 'WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
+            metadata['CanonVRD:WhiteBalanceAdj']]
+    if 'CanonVRD:CropActive' in metadata:
+        metadata['crs:' + 'HasCrop'] = CROP_MAPPINGS[
+            metadata['CanonVRD:CropActive']]
+    return metadata
+
+def main(fileglob):
     data = {}
-    files = glob.glob('tests/jm_20d_7252509.cr2')
+    files = glob.glob(fileglob)
     filenames = {}
+    if not files:
+        print 'No files'
+        return
     with exiftool.ExifTool() as et:
         for i, filename in enumerate(files):
             print i, filename
             filenames[i] = filename
             metadata = et.get_metadata(filename)
-        for metadata in et.get_metadata_batch(files):
-            filename = metadata['SourceFile']
-            picture_style = metadata.get('CanonVRD:PictureStyle')
-            if picture_style:
-                if picture_style in PICTURE_STYLES:
-                    picture_style = PICTURE_STYLES[picture_style]
-                    picture_key = 'CanonVRD:' + picture_style
-                    for key, setting in metadata.items():
-                        if key.startswith(picture_key):
-                            new_key = key.replace(picture_key, 'CanonVRD:')
-                            metadata[new_key] = metadata[key]
-            if 'CanonVRD:WhiteBalanceAdj' in metadata:
-                metadata['WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
-                    metadata['CanonVRD:WhiteBalanceAdj']]
-            if 'CanonVRD:CropActive' in metadata:
-                metadata['HasCrop'] = CROP_MAPPINGS[
-                    metadata['CanonVRD:CropActive']]
-            data[filename] = metadata
+            data[filename] = process_metadata(metadata)
         for setting, description in ALL_CRS.items():
             other_setting = setting.replace('2012', '')
             if setting not in MAPPINGS:
                 LIKELY_MAPPINGS[setting] = set()
-                for key in data[filename]:
-                    if setting in key:
-                        LIKELY_MAPPINGS[setting].add((key, data[filename][key]))
-                    if '2012' in setting:
-                        if other_setting in key:
-                            LIKELY_MAPPINGS[setting].add(
-                                (key, data[filename][key]))
+                for metadata in data.values():
+                    for key in metadata:
+                        if setting in key:
+                            LIKELY_MAPPINGS[setting].add((key, metadata[key]))
+                        if '2012' in setting:
+                            if other_setting in key:
+                                LIKELY_MAPPINGS[setting].add(
+                                    (key, metadata[key]))
+
+    pprint.pprint(data)
     pprint.pprint(LIKELY_MAPPINGS)
 if __name__ == '__main__':
-   main()
+    import sys
+    print len(sys.argv)
+    fileglob = 'tests/*.cr2'
+    main(fileglob)

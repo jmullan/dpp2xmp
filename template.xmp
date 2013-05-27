@@ -10,7 +10,7 @@
     xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
     xmlns:stEvt="http://ns.adobe.com/xap/1.0/sType/ResourceEvent#"
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-   {{ fields }}
+   ##fields##
   >
    <exif:ISOSpeedRatings>
     <rdf:Seq>
@@ -28,16 +28,6 @@
      <rdf:li>unknown</rdf:li>
     </rdf:Seq>
    </dc:creator>
-   <xmpMM:History>
-    <rdf:Seq>
-     <rdf:li
-      stEvt:action="saved"
-      stEvt:instanceID="xmp.iid:da77348f-b622-b34a-831e-932464a17dd0"
-      stEvt:when="2013-05-26T15:31:10-07:00"
-      stEvt:softwareAgent="Adobe Photoshop Lightroom 4.4 (Windows)"
-      stEvt:changed="/metadata"/>
-    </rdf:Seq>
-   </xmpMM:History>
    <crs:ToneCurvePV2012>
     <rdf:Seq>
      <rdf:li>0, 0</rdf:li>
