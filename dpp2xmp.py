@@ -1,3 +1,6 @@
+from __future__ import division
+
+import math
 import exiftool
 import glob
 import pprint
@@ -7,6 +10,182 @@ import re
 # http://wwwimages.adobe.com/www.adobe.com/content/dam/Adobe/en/devnet/xmp/pdfs/cs6/XMPSpecificationPart2.pdf
 # http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/CanonVRD.html
 # http://www.adobe.com/content/dam/Adobe/en/devnet/xmp/pdfs/XMPSpecificationPart1.pdf
+
+
+def mapCoordinates(orientation, top, left, bottom, right, angle, wholeWidth, wholeHeight):
+    wholeW = wholeWidth
+    wholeH = wholeHeight
+
+    # map orthogonally
+    if orientation == 'Horizontal (normal)':
+        t = top
+        l = left
+        b = bottom
+        r = right
+
+    elif orientation == 'Mirror horizontal':
+        t = top
+        l = 1 - right
+        b = bottom
+        r = 1 - left
+
+    elif orientation == 'Mirror vertical':
+        t = 1 - bottom
+        l = left
+        b = 1 - top
+        r = right
+
+    elif orientation == 'Rotate 90 CW':
+        wholeW = wholeHeight
+        wholeH = wholeWidth
+
+        t = 1 - right
+        l = top
+        b = 1 - left
+        r = bottom
+
+    elif orientation == 'Rotate 180':
+        t = 1 - bottom
+        l = 1 - right
+        b = 1 - top
+        r = 1 - left
+
+    elif orientation == 'Rotate 270 CW':
+        # mirror vertical and rotate 90CW
+        wholeW = wholeHeight
+        wholeH = wholeWidth
+
+        t = left
+        l = 1 - bottom
+        b = right
+        r = 1 - top
+
+    elif orientation == 'Mirror horizontal and rotate 270 CW':
+        wholeW = wholeHeight
+        wholeH = wholeWidth
+
+        t = left
+        l = top
+        b = right
+        r = bottom
+
+    elif orientation == 'Mirror horizontal and rotate 90 CW':
+        wholeW = wholeHeight
+        wholeH = wholeWidth
+
+        t = 1 - right
+        l = 1 - bottom
+        b = 1 - left
+        r = 1 - top
+
+    else:
+        raise ValueError("Unrecognized orientation.")
+
+    # rotate -45 to 45 degrees (True angle opposite sign from UI)
+    # uses basic formula for translating to polar coordinates, setting the
+    # angle, then translating back.
+    if angle != 0:
+        sin = math.sin(math.radians(angle))
+        cos = math.cos(math.radians(angle))
+
+    #[[ *** formula from Steve Sprengel
+    # ref:  http://feedback.photoshop.com/photoshop_family/topics/lightroom_
+    # camera_raw_dng_xmp_what_is_the_formula_for_converting_crop_coordinates
+    # _when_photo_gets_angled
+    # ref2: http://answers.yahoo.com/question/index?qid=20100314163944AAIu9xk
+    # x_prime = x * Cos(theta) - y * Sin(theta) + a
+    # y_prime = x * Sin(theta) + y * Cos(theta) + b
+    #]]
+
+        # fractional
+        wFrac = r - l
+        hFrac = b - t
+
+        wPix = wFrac * wholeW
+        hPix = hFrac * wholeH
+
+        leftInPixels = l * wholeW
+        topInPixels = t * wholeH
+        rightInPixels = r * wholeW
+        bottomInPixels = b * wholeH
+
+        # x, y -> coordinates, in pixels, of upper l corner of crop box,
+        #  relative to center of crop box (and hence, center of rotation).
+        x = -wPix / 2
+        y = -hPix / 2
+
+        # xT, yT -> angled coordinates, transformed according to angle, but
+        # still relative to center of rotation/crop-box.
+        xT = x * cos - y * sin
+        yT = x * sin + y * cos
+
+        # xP, yP -> angled coordinates, in pixels, relative to upper l corner
+        # of image.
+        xP = leftInPixels + (xT - x)
+        yP = topInPixels + (yT - y)
+
+        # final coordinates, as fractional values.
+        l = xP / wholeW
+        t = yP / wholeH
+
+        # x, y -> coordinates, in pixels, of upper l corner of crop box,
+        # relative to center of crop box (and hence, center of rotation).
+        x = wPix/2
+        y = hPix/2
+
+        xT = x * cos - y * sin
+        yT = x * sin + y * cos
+
+        # xP, yP -> angled coordinates, in pixels, relative to upper l corner
+        # of image.
+        xP = rightInPixels + (xT - x)
+        yP = bottomInPixels + (yT - y)
+
+        # xF, yF -> final coordinates, as fractional values.
+        r = xP / wholeW
+        b = yP / wholeH
+
+    # assure rotated coordinates are bounded in image:
+    shrunk = False
+    if t < 0:
+        b = b - t # add t differential to b
+        t = 0
+        shrunk = True
+    if l < 0:
+        r = r - l # add differential to maintain width.
+        l = 0
+        shrunk = True
+    if b > 1:
+        t = t - (b - 1)
+        if t < 0:
+            t = 0
+        b = 1
+        shrunk = True
+    if r > 1:
+        l = l - (r - 1)
+        if l < 0:
+            l = 0
+        r = 1
+        shrunk = True
+    if t >= b:
+        return None, None, None, None, "Unable to accomodate specified height."
+    if l >= r:
+        return None, None, None, None, "Unable to accomodate specified width."
+    if shrunk:
+        msg = "Some coordinates were modified to stay in range."
+    return t, l, b, r, msg
+
+
+ORIENTATION_MAPPINGS = {
+    1: 'Horizontal (normal)',
+    2: 'Mirror horizontal',
+    3: 'Rotate 180',
+    4: 'Mirror vertical',
+    5: 'Mirror horizontal and rotate 270 CW',
+    6: 'Rotate 90 CW',
+    7: 'Mirror horizontal and rotate 90 CW',
+    8: 'Rotate 270 CW',
+}
 
 
 FIELDS = set(re.split('\s+', '''tiff:Make
@@ -89,7 +268,11 @@ WHITE_BALANCE_MAPPINGS = {
 CRS = {
     'AlreadyApplied': {'type': bool, 'values': [False, True], 'default': False},
     'AutoLateralCA': {'type': int, 'values': [False, True], 'default': False},
-    'CameraProfileDigest': {'type': int, 'values': [-100, 100], 'default': 0},
+    'CameraProfileDigest': {
+        'type': str,
+        'values': ['9C057227216BE688434471F22E5E736D'],
+        'default': '9C057227216BE688434471F22E5E736D'
+    },
     'ColorNoiseReductionDetail': {
         'type': int, 'values': [-100, 100], 'default': 50},
     'ConvertToGrayscale': {'type': int, 'values': [-100, 100], 'default': 0},
@@ -114,27 +297,44 @@ CRS = {
     'LensProfileChromaticAberrationScale': {
         'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileDigest': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LensProfileDistortionScale': {'type': int, 'values': [-100, 100], 'default': 0},
+    'LensProfileDistortionScale': {
+        'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileEnable': {'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileFilename': {'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileName': {'type': int, 'values': [-100, 100], 'default': 0},
     'LensProfileSetup': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LensProfileVignettingScale': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentAqua': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentBlue': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentGreen': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentMagenta': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentOrange': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentPurple': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentRed': {'type': int, 'values': [-100, 100], 'default': 0},
-    'LuminanceAdjustmentYellow': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ParametricDarks': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ParametricHighlightSplit': {'type': int, 'values': [-100, 100], 'default': 75},
-    'ParametricHighlights': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ParametricLights': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ParametricMidtoneSplit': {'type': int, 'values': [-100, 100], 'default': 50},
-    'ParametricShadowSplit': {'type': int, 'values': [-100, 100], 'default': 25},
-    'ParametricShadows': {'type': int, 'values': [-100, 100], 'default': 0},
+    'LensProfileVignettingScale': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentAqua': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentBlue': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentGreen': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentMagenta': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentOrange': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentPurple': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentRed': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'LuminanceAdjustmentYellow': {
+        'type': int, 'values': [-100, 100], 'default': 0},
+    'ParametricDarks': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'ParametricHighlightSplit': {
+        'type': int, 'values': [-100, 100], 'default': 75},
+    'ParametricHighlights': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'ParametricLights': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'ParametricMidtoneSplit': {
+        'type': int, 'values': [-100, 100], 'default': 50},
+    'ParametricShadowSplit': {
+        'type': int, 'values': [-100, 100], 'default': 25},
+    'ParametricShadows': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
     'PerspectiveHorizontal': {'type': int, 'values': [-100, 100], 'default': 0},
     'PerspectiveRotate': {'type': int, 'values': [-100, 100], 'default': 0},
     'PerspectiveScale': {'type': int, 'values': [-100, 100], 'default': 100},
@@ -151,43 +351,98 @@ CRS = {
     'SaturationAdjustmentYellow': {'type': int, 'values': [-100, 100], 'default': 0},
     'SharpenDetail': {'type': int, 'values': [-100, 100], 'default': 0},
     'SharpenEdgeMasking': {'type': int, 'values': [-100, 100], 'default': 0},
-    'SharpenRadius': {'type': int, 'values': [-100, 100], 'default': 0},
+    'SharpenRadius': {
+        'type': float, 'values': [-100, 100], 'default': 0, 'plus': True},
     'SplitToningBalance': {'type': int, 'values': [-100, 100], 'default': 0},
     'SplitToningHighlightHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'SplitToningHighlightSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
     'SplitToningShadowHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'SplitToningShadowSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Vibrance': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Vibrance': {
+        'type': int,
+        'values': [-100, 100],
+        'default': 0,
+        'plus': True,
+    },
+}
+
+DEPRECATED = {
+    'Exposure': {'type': float, 'values': [-4.0, 4.0], 'default': 0},
+    'Contrast': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Shadows': {'type': int, 'values': [-100, 100], 'default': 0},
+    # skipping Tonecurve
+    'ToneCurveName': { 'type': str, 'values': ['Linear'], 'default': 'Linear'},
+}
+
+CRS_2012 = {
+    'Blacks2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'Clarity2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'Contrast2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'Exposure2012': {
+        'type': float, 'values': [-8.0, 5.0], 'default': 0, 'plus': True},
+    'Highlights2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'Shadows2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'Whites2012': {
+        'type': int, 'values': [-100, 100], 'default': 0, 'plus': True},
+    'ToneCurveName2012': {
+        'type': str, 'values': ['Linear'], 'default': 'Linear'},
 }
 REAL_CRS = {
+    'AutoBrightness': {'type': bool, 'values': [False, True], 'default': False},
+    'AutoContrast': {'type': bool, 'values': [False, True], 'default': False},
+    'AutoExposure': {'type': bool, 'values': [False, True], 'default': False},
+    'AutoShadows': {'type': bool, 'values': [False, True], 'default': False},
     'BlueHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'BlueSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Brightness': {'type': int, 'values': [0, 150], 'default': 0},
     'CameraProfile': {
         'type': str,
         'values': ['Adobe Standard'],
         'default': 'Adobe Standard',
     },
-    'ColorNoiseReduction': {'type': int, 'values': [-100, 100], 'default': 0},
+    'ChromaticAberrationB': {'type': int, 'values': [-100, 100], 'default': 0},
+    'ChromaticAberrationR': {'type': int, 'values': [-100, 100], 'default': 0},
+    'ColorNoiseReduction': {'type': int, 'values': [0, 100], 'default': 0},
     'CropAngle': {'type': float, 'values': [0, 1], 'default': 0},
     'CropBottom': {'type': float, 'values': [0, 1], 'default': 1},
     'CropLeft': {'type': float, 'values': [0, 1], 'default': 0},
     'CropRight': {'type': float, 'values': [0, 1], 'default': 1},
     'CropTop': {'type': float, 'values': [0, 1], 'default': 0},
+    'CropHeight': {'type': float, 'values': [0, 1], 'default': 0},
+    'CropWidth': {'type': float, 'values': [0, 1], 'default': 0},
+    'CropUnits': {'type': int, 'values': [-100, 100], 'default': 0},
     'GreenHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'GreenSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
     'HasCrop': {'type': bool, 'values': [False, True], 'default': False},
-    'HasSettings': {'type': bool, 'values': [False, True], 'default': False},
+    'HasSetting1s': {
+        'type': bool,
+        'values': [False, True],
+        'default': True
+    },
     'LuminanceSmoothing': {'type': int, 'values': [0, 100], 'default': 0},
     'RawFileName': {'type': str, 'values': None, 'default': None},
     'RedHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'RedSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Saturation': {'type': int, 'values': [-100, 100], 'default': 0},
+    'Saturation': {
+        'type': int,
+        'values': [-100, 100],
+        'default': 0,
+        'plus': True,
+    },
     'ShadowTint': {'type': int, 'values': [-100, 100], 'default': 0},
     'Sharpness': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Temperature': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Tint': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Version': {'type': str, 'values': [-100, 100], 'default': 0},
+    'Temperature': {'type': int, 'values': [2000, 50000], 'default': 5200},
+    'Tint': {'type': int, 'values': [-150, 150], 'default': 0, 'plus': True},
+    'Version': {
+        'type': str, 'values': ['7.4'], 'default': '7.4'},
     'VignetteAmount': {'type': int, 'values': [-100, 100], 'default': 0},
+    'VignetteMidpoint': {
+        'type': int, 'values': [0, 100], 'default': 0},
     'WhiteBalance': {
         'type': str,
         'values': [
@@ -196,18 +451,6 @@ REAL_CRS = {
         ],
         'default': 'As Shot',
     },
-}
-
-CRS_2012 = {
-    'Blacks2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Clarity2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Contrast2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Exposure2012': {'type': float, 'values': [-10.0, 10.0], 'default': 0},
-    'Highlights2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Shadows2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'Whites2012': {'type': int, 'values': [-100, 100], 'default': 0},
-    'ToneCurveName2012': {
-        'type': str, 'values': ['Linear'], 'default': 'Linear'},
 }
 ALL_CRS = dict(CRS.items() + REAL_CRS.items() + CRS_2012.items())
 CROP_MAPPINGS = {
@@ -219,9 +462,11 @@ CROP_MAPPINGS = {
 MAPPINGS = {
     'CropAngle': set(['CanonVRD:AngleAdj',]),
     'CropLeft': set(['CanonVRD:CropLeft']),
-    'CropRight': set(['CanonVRD:CropWidth']),
     'CropTop': set(['CanonVRD:CropTop']),
+    'CropRight': set(['CanonVRD:CropWidth']),
     'CropBottom': set(['CanonVRD:CropHeight']),
+    'CropWidth': set(['CanonVRD:CropWidth']),
+    'CropHeight': set(['CanonVRD:CropHeight']),
     'HasCrop': set(['CanonVRD:CropActive',]),
     'Saturation': set(['CanonVRD:RawSaturation']),
     'Sharpness': set([
@@ -254,6 +499,18 @@ MAPPINGS = {
     'Shadows2012': set([
         'CanonVRD:RawShadow',
     ]),
+    'ImageHeight': set([
+        'tiff:ImageHeight',
+        'exif:PixelYDimension',
+        'MakerNotes:CanonImageHeight',
+        'EXIF:ExifImageHeight',
+    ]),
+    'ImageWidth': set([
+        'tiff:ImageWidth',
+        'exif:PixelXDimension',
+        'MakerNotes:CanonImageWidth',
+        'EXIF:ExifImageWidth',
+    ]),
 }
 LIKELY_MAPPINGS = {}
 
@@ -275,35 +532,60 @@ def process_metadata(metadata):
             if source in metadata:
                 metadata['crs:' + mapping] = metadata[source]
                 found = True
+        if not found:
+            print 'Not found: {} {}'.format(mapping, sources)
 
     if 'CanonVRD:WhiteBalanceAdj' in metadata:
-        metadata['crs:' + 'WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
+        metadata['crs:WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
             metadata['CanonVRD:WhiteBalanceAdj']]
     if 'CanonVRD:CropActive' in metadata:
-        metadata['crs:' + 'HasCrop'] = CROP_MAPPINGS[
+        metadata['crs:HasCrop'] = CROP_MAPPINGS[
             metadata['CanonVRD:CropActive']]
+    height = metadata['crs:ImageHeight']
+    width = metadata['crs:ImageWidth']
+    if metadata['crs:HasCrop']:
+        croptop = metadata.get('CanonVRD:CropTop', 0)
+        cropheight = metadata.get('CanonVRD:CropHeight', height)
+        cropleft = metadata.get('CanonVRD:CropLeft', 0)
+        cropwidth = metadata.get('CanonVRD:CropWidth', width)
+        metadata['crs:CropTop'] = round(
+            croptop / height, 6)
+        metadata['crs:CropLeft'] = round(
+            cropleft / width, 6)
+        metadata['crs:CropBottom'] = round(
+            (croptop + cropheight) / height, 6)
+        metadata['crs:CropRight'] = round(
+            (cropleft + cropwidth) / width, 6)
     return metadata
 
 def format_field(k, v):
     if k not in ALL_CRS:
         return str(v)
     f = ALL_CRS[k]['type']
-    if f == int:
-        return int(v)
-    if f == float:
-        return float(v)
-    if f == str:
-        return str(v)
+    v = f(v)
     if f == bool:
         if v:
             return 'True'
         else:
             return False
+    if ALL_CRS[k].get('plus') and v > 0:
+        return '+{}'.format(v)
+    return v
 
 def metadata_to_fields(metadata):
     lines = []
+    whitelist = [
+        'xmp', 'tiff', 'exif', 'dc', 'aux', 'photoshop', 'xmpMM', 'stEvt', 'crs'
+    ]
     for k, v in metadata.items():
-        lines.append('{}="{}"'.format(k, format_field(k, v)))
+        if ':' not in k:
+            continue
+        group, w = k.split(':')
+        if group.lower() in whitelist:
+            group = group.lower()
+            k = '{}:{}'.format(group, w)
+        if group in whitelist:
+            lines.append('{}="{}"'.format(k, format_field(k, v)))
     for k, definition in ALL_CRS.items():
         k = 'crs:' + k
         if k in metadata:
@@ -312,7 +594,7 @@ def metadata_to_fields(metadata):
             lines.append('{}="{}"'.format(
                 k, format_field(k, definition['default'])))
     lines = sorted(lines)
-    fields = "\r\n    ".join(lines)
+    fields = "\r\n   ".join(lines)
     return fields
 
 def main(fileglobs):
