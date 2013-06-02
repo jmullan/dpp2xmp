@@ -12,168 +12,95 @@ import re
 # http://www.adobe.com/content/dam/Adobe/en/devnet/xmp/pdfs/XMPSpecificationPart1.pdf
 
 
-def mapCoordinates(orientation, top, left, bottom, right, angle, wholeWidth, wholeHeight):
-    wholeW = wholeWidth
-    wholeH = wholeHeight
+class Image(object):
+    def __init__(self, height, width, orientation):
+        self.height = height
+        self.width = width
+        self.orientation = orientation
 
-    # map orthogonally
-    if orientation == 'Horizontal (normal)':
-        t = top
-        l = left
-        b = bottom
-        r = right
+        self.cropTop = 0
+        self.cropLeft = 0
+        self.cropHeight = 0
+        self.cropWidth = 0
+        self.cropDegrees = 0
+        self.hasCrop = 0
 
-    elif orientation == 'Mirror horizontal':
-        t = top
-        l = 1 - right
-        b = bottom
-        r = 1 - left
+    def cropDpp(self, top, left, height, width, degrees):
+        self.cropTop = top
+        self.cropLeft = left
+        self.cropHeight = height
+        self.cropWidth = width
+        self.cropDegrees = degrees
 
-    elif orientation == 'Mirror vertical':
-        t = 1 - bottom
-        l = left
-        b = 1 - top
-        r = right
-
-    elif orientation == 'Rotate 90 CW':
-        wholeW = wholeHeight
-        wholeH = wholeWidth
-
-        t = 1 - right
-        l = top
-        b = 1 - left
-        r = bottom
-
-    elif orientation == 'Rotate 180':
-        t = 1 - bottom
-        l = 1 - right
-        b = 1 - top
-        r = 1 - left
-
-    elif orientation == 'Rotate 270 CW':
-        # mirror vertical and rotate 90CW
-        wholeW = wholeHeight
-        wholeH = wholeWidth
-
-        t = left
-        l = 1 - bottom
-        b = right
-        r = 1 - top
-
-    elif orientation == 'Mirror horizontal and rotate 270 CW':
-        wholeW = wholeHeight
-        wholeH = wholeWidth
-
-        t = left
-        l = top
-        b = right
-        r = bottom
-
-    elif orientation == 'Mirror horizontal and rotate 90 CW':
-        wholeW = wholeHeight
-        wholeH = wholeWidth
-
-        t = 1 - right
-        l = 1 - bottom
-        b = 1 - left
-        r = 1 - top
-
-    else:
-        raise ValueError("Unrecognized orientation.")
-
-    # rotate -45 to 45 degrees (True angle opposite sign from UI)
-    # uses basic formula for translating to polar coordinates, setting the
-    # angle, then translating back.
-    if angle != 0:
-        sin = math.sin(math.radians(angle))
-        cos = math.cos(math.radians(angle))
-
-    #[[ *** formula from Steve Sprengel
-    # ref:  http://feedback.photoshop.com/photoshop_family/topics/lightroom_
-    # camera_raw_dng_xmp_what_is_the_formula_for_converting_crop_coordinates
-    # _when_photo_gets_angled
-    # ref2: http://answers.yahoo.com/question/index?qid=20100314163944AAIu9xk
-    # x_prime = x * Cos(theta) - y * Sin(theta) + a
-    # y_prime = x * Sin(theta) + y * Cos(theta) + b
-    #]]
+    def getXMPCrop(self):
+        # rotate -45 to 45 degrees (True angle opposite sign from UI)
+        # uses basic formula for translating to polar coordinates, setting the
+        # angle, then translating back.
+        #[[ *** formula from Steve Sprengel
+        # ref:  http://feedback.photoshop.com/photoshop_family/topics/lightroom_
+        # camera_raw_dng_xmp_what_is_the_formula_for_converting_crop_coordinates
+        # _when_photo_gets_angled
+        # ref2:
+        # http://answers.yahoo.com/question/index?qid=20100314163944AAIu9xk
+        # x_prime = x * Cos(theta) - y * Sin(theta) + a
+        # y_prime = x * Sin(theta) + y * Cos(theta) + b
+        #]]
 
         # fractional
-        wFrac = r - l
-        hFrac = b - t
+        sin = math.sin(math.radians(self.degrees))
+        cos = math.cos(math.radians(self.degrees))
 
-        wPix = wFrac * wholeW
-        hPix = hFrac * wholeH
-
-        leftInPixels = l * wholeW
-        topInPixels = t * wholeH
-        rightInPixels = r * wholeW
-        bottomInPixels = b * wholeH
+        bottomInPixels = self.cropTop + self.cropHeight
+        rightInPixels = self.cropLeft + self.cropWidth
 
         # x, y -> coordinates, in pixels, of upper l corner of crop box,
         #  relative to center of crop box (and hence, center of rotation).
-        x = -wPix / 2
-        y = -hPix / 2
+        xUpperLeft = -self.cropWidth / 2
+        yUpperLeft = -self.cropHeight / 2
+        xLowerRight = self.cropWidth / 2
+        yLowerRight = self.cropHeight / 2
 
         # xT, yT -> angled coordinates, transformed according to angle, but
         # still relative to center of rotation/crop-box.
-        xT = x * cos - y * sin
-        yT = x * sin + y * cos
+        xUpperLeftT = xUpperLeft * cos - yUpperLeft * sin
+        yUpperLeftT = xUpperLeft * sin + yUpperLeft * cos
+        xLowerRightT = xLowerRight * cos - yLowerRight * sin
+        yLowerRightT = xLowerRight * sin + yLowerRight * cos
 
         # xP, yP -> angled coordinates, in pixels, relative to upper l corner
         # of image.
-        xP = leftInPixels + (xT - x)
-        yP = topInPixels + (yT - y)
+        cropLeftPixelsP = self.cropLeft + (xUpperLeftT - xUpperLeft)
+        cropTopPixelsP = self.cropTop + (yUpperLeftT - yUpperLeft)
+        cropRightPixelsP = rightInPixels + (xLowerRightT - xLowerRight)
+        cropBottomPixelsP = bottomInPixels + (yLowerRightT - yLowerRight)
 
         # final coordinates, as fractional values.
-        l = xP / wholeW
-        t = yP / wholeH
+        left = cropLeftPixelsP / self.width
+        top = cropTopPixelsP / self.height
+        right = cropRightPixelsP / self.width
+        bottom = cropBottomPixelsP / self.height
 
-        # x, y -> coordinates, in pixels, of upper l corner of crop box,
-        # relative to center of crop box (and hence, center of rotation).
-        x = wPix/2
-        y = hPix/2
-
-        xT = x * cos - y * sin
-        yT = x * sin + y * cos
-
-        # xP, yP -> angled coordinates, in pixels, relative to upper l corner
-        # of image.
-        xP = rightInPixels + (xT - x)
-        yP = bottomInPixels + (yT - y)
-
-        # xF, yF -> final coordinates, as fractional values.
-        r = xP / wholeW
-        b = yP / wholeH
-
-    # assure rotated coordinates are bounded in image:
-    shrunk = False
-    if t < 0:
-        b = b - t # add t differential to b
-        t = 0
-        shrunk = True
-    if l < 0:
-        r = r - l # add differential to maintain width.
-        l = 0
-        shrunk = True
-    if b > 1:
-        t = t - (b - 1)
-        if t < 0:
-            t = 0
-        b = 1
-        shrunk = True
-    if r > 1:
-        l = l - (r - 1)
-        if l < 0:
-            l = 0
-        r = 1
-        shrunk = True
-    if t >= b:
-        return None, None, None, None, "Unable to accomodate specified height."
-    if l >= r:
-        return None, None, None, None, "Unable to accomodate specified width."
-    if shrunk:
-        msg = "Some coordinates were modified to stay in range."
-    return t, l, b, r, msg
+        if top < 0:
+            bottom = bottom - top # add t differential to b
+            top = 0
+        if left < 0:
+            right = right - left # add differential to maintain width.
+            left = 0
+        if bottom > 1:
+            top = top - (bottom - 1)
+            if top < 0:
+                top = 0
+            bottom = 1
+        if right > 1:
+            left = left - (right - 1)
+            if left < 0:
+                left = 0
+            right = 1
+        if top > bottom:
+            top, bottom = bottom, top
+        if left > right:
+            left, right = right, left
+        return top, left, bottom, right
 
 
 ORIENTATION_MAPPINGS = {
@@ -454,6 +381,8 @@ REAL_CRS = {
 }
 ALL_CRS = dict(CRS.items() + REAL_CRS.items() + CRS_2012.items())
 CROP_MAPPINGS = {
+    False: False,
+    True: True,
     0: False,
     1: True,
     'No': False,
@@ -538,24 +467,24 @@ def process_metadata(metadata):
     if 'CanonVRD:WhiteBalanceAdj' in metadata:
         metadata['crs:WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
             metadata['CanonVRD:WhiteBalanceAdj']]
-    if 'CanonVRD:CropActive' in metadata:
-        metadata['crs:HasCrop'] = CROP_MAPPINGS[
-            metadata['CanonVRD:CropActive']]
+    metadata['crs:HasCrop'] = CROP_MAPPINGS[
+        metadata.get('CanonVRD:CropActive', False)]
     height = metadata['crs:ImageHeight']
     width = metadata['crs:ImageWidth']
+    orientation = metadata.get('tiff:Orientation', 'Horizontal (normal)')
     if metadata['crs:HasCrop']:
         croptop = metadata.get('CanonVRD:CropTop', 0)
         cropheight = metadata.get('CanonVRD:CropHeight', height)
         cropleft = metadata.get('CanonVRD:CropLeft', 0)
         cropwidth = metadata.get('CanonVRD:CropWidth', width)
-        metadata['crs:CropTop'] = round(
-            croptop / height, 6)
-        metadata['crs:CropLeft'] = round(
-            cropleft / width, 6)
-        metadata['crs:CropBottom'] = round(
-            (croptop + cropheight) / height, 6)
-        metadata['crs:CropRight'] = round(
-            (cropleft + cropwidth) / width, 6)
+        degrees = metadata.get('CanonCRD:AngleAdj')
+        image = Image(height, width, orientation)
+        image.crop(croptop, cropleft, cropheight, cropwidth, degrees)
+        t, l, b, r = image.getXMPCrop()
+        metadata['crs:CropTop'] = round(t, 6)
+        metadata['crs:CropLeft'] = round(l, 6)
+        metadata['crs:CropBottom'] = round(b, 6)
+        metadata['crs:CropRight'] = round(r, 6)
     return metadata
 
 def format_field(k, v):
