@@ -13,6 +13,7 @@ import re
 
 
 class Image(object):
+
     def __init__(self, height, width, orientation):
         self.height = height
         self.width = width
@@ -30,7 +31,7 @@ class Image(object):
         self.cropLeft = left
         self.cropHeight = height
         self.cropWidth = width
-        self.cropDegrees = degrees
+        self.cropDegrees = float(degrees)
 
     def getXMPCrop(self):
         # rotate -45 to 45 degrees (True angle opposite sign from UI)
@@ -47,8 +48,8 @@ class Image(object):
         #]]
 
         # fractional
-        sin = math.sin(math.radians(self.degrees))
-        cos = math.cos(math.radians(self.degrees))
+        sin = math.sin(math.radians(self.cropDegrees))
+        cos = math.cos(math.radians(self.cropDegrees))
 
         bottomInPixels = self.cropTop + self.cropHeight
         rightInPixels = self.cropLeft + self.cropWidth
@@ -80,26 +81,6 @@ class Image(object):
         right = cropRightPixelsP / self.width
         bottom = cropBottomPixelsP / self.height
 
-        if top < 0:
-            bottom = bottom - top # add t differential to b
-            top = 0
-        if left < 0:
-            right = right - left # add differential to maintain width.
-            left = 0
-        if bottom > 1:
-            top = top - (bottom - 1)
-            if top < 0:
-                top = 0
-            bottom = 1
-        if right > 1:
-            left = left - (right - 1)
-            if left < 0:
-                left = 0
-            right = 1
-        if top > bottom:
-            top, bottom = bottom, top
-        if left > right:
-            left, right = right, left
         return top, left, bottom, right
 
 
@@ -298,7 +279,10 @@ DEPRECATED = {
     'Contrast': {'type': int, 'values': [-100, 100], 'default': 0},
     'Shadows': {'type': int, 'values': [-100, 100], 'default': 0},
     # skipping Tonecurve
-    'ToneCurveName': { 'type': str, 'values': ['Linear'], 'default': 'Linear'},
+    'ToneCurveName': {'type': str, 'values': ['Linear'], 'default': 'Linear'},
+    'CropHeight': {'type': float, 'values': [0, 1], 'default': 0},
+    'CropWidth': {'type': float, 'values': [0, 1], 'default': 0},
+    'CropUnits': {'type': int, 'values': [-100, 100], 'default': 0},
 }
 
 CRS_2012 = {
@@ -340,9 +324,6 @@ REAL_CRS = {
     'CropLeft': {'type': float, 'values': [0, 1], 'default': 0},
     'CropRight': {'type': float, 'values': [0, 1], 'default': 1},
     'CropTop': {'type': float, 'values': [0, 1], 'default': 0},
-    'CropHeight': {'type': float, 'values': [0, 1], 'default': 0},
-    'CropWidth': {'type': float, 'values': [0, 1], 'default': 0},
-    'CropUnits': {'type': int, 'values': [-100, 100], 'default': 0},
     'GreenHue': {'type': int, 'values': [-100, 100], 'default': 0},
     'GreenSaturation': {'type': int, 'values': [-100, 100], 'default': 0},
     'HasCrop': {'type': bool, 'values': [False, True], 'default': False},
@@ -389,14 +370,14 @@ CROP_MAPPINGS = {
     'Yes': True,
 }
 MAPPINGS = {
-    'CropAngle': set(['CanonVRD:AngleAdj',]),
+    'CropAngle': set(['CanonVRD:AngleAdj', ]),
     'CropLeft': set(['CanonVRD:CropLeft']),
     'CropTop': set(['CanonVRD:CropTop']),
     'CropRight': set(['CanonVRD:CropWidth']),
     'CropBottom': set(['CanonVRD:CropHeight']),
     'CropWidth': set(['CanonVRD:CropWidth']),
     'CropHeight': set(['CanonVRD:CropHeight']),
-    'HasCrop': set(['CanonVRD:CropActive',]),
+    'HasCrop': set(['CanonVRD:CropActive', ]),
     'Saturation': set(['CanonVRD:RawSaturation']),
     'Sharpness': set([
         'CanonVRD:RawSharpness',
@@ -432,16 +413,19 @@ MAPPINGS = {
         'tiff:ImageHeight',
         'exif:PixelYDimension',
         'MakerNotes:CanonImageHeight',
+        'MakerNotes:ImageHeight',
         'EXIF:ExifImageHeight',
     ]),
     'ImageWidth': set([
         'tiff:ImageWidth',
         'exif:PixelXDimension',
         'MakerNotes:CanonImageWidth',
+        'MakerNotes:ImageWidth',
         'EXIF:ExifImageWidth',
     ]),
 }
 LIKELY_MAPPINGS = {}
+
 
 def process_metadata(metadata):
     picture_style = metadata.get('CanonVRD:PictureStyle')
@@ -477,15 +461,16 @@ def process_metadata(metadata):
         cropheight = metadata.get('CanonVRD:CropHeight', height)
         cropleft = metadata.get('CanonVRD:CropLeft', 0)
         cropwidth = metadata.get('CanonVRD:CropWidth', width)
-        degrees = metadata.get('CanonCRD:AngleAdj')
+        degrees = metadata.get('CanonVRD:AngleAdj', 0)
         image = Image(height, width, orientation)
-        image.crop(croptop, cropleft, cropheight, cropwidth, degrees)
+        image.cropDpp(croptop, cropleft, cropheight, cropwidth, degrees)
         t, l, b, r = image.getXMPCrop()
         metadata['crs:CropTop'] = round(t, 6)
         metadata['crs:CropLeft'] = round(l, 6)
         metadata['crs:CropBottom'] = round(b, 6)
         metadata['crs:CropRight'] = round(r, 6)
     return metadata
+
 
 def format_field(k, v):
     if k not in ALL_CRS:
@@ -500,6 +485,7 @@ def format_field(k, v):
     if ALL_CRS[k].get('plus') and v > 0:
         return '+{}'.format(v)
     return v
+
 
 def metadata_to_fields(metadata):
     lines = []
@@ -526,13 +512,15 @@ def metadata_to_fields(metadata):
     fields = "\r\n   ".join(lines)
     return fields
 
+
 def main(fileglobs):
     import os
     template = open(os.path.dirname(os.path.abspath(__file__))
                     + '/template.xmp').read()
     with exiftool.ExifTool() as et:
         for fileglob in fileglobs:
-            files = [x for x in glob.glob(fileglob) if x.endswith('.cr2')]
+            files = [x for x in glob.glob(fileglob) if x.endswith(
+                '.cr2') or x.endswith('.crw')]
             if not files:
                 print 'No files for glob %s' % fileglob
                 continue
@@ -543,9 +531,9 @@ def main(fileglobs):
                     cr2_mtime = os.path.getmtime(filename)
                     xmp_mtime = os.path.getmtime(xmp_filename)
                     replace_xmp = cr2_mtime > xmp_mtime
+                metadata = et.get_metadata(filename)
+                metadata = process_metadata(metadata)
                 if replace_xmp:
-                    metadata = et.get_metadata(filename)
-                    metadata = process_metadata(metadata)
                     output = template.replace(
                         '##FIELDS##',
                         metadata_to_fields(metadata)
@@ -553,6 +541,8 @@ def main(fileglobs):
                     f = open(xmp_filename, 'w')
                     f.write(output)
                     f.close()
+                else:
+                    pprint.pprint(metadata)
 
 if __name__ == '__main__':
     import sys
