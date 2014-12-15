@@ -3,7 +3,6 @@ from __future__ import division
 import math
 import exiftool
 import glob
-import pprint
 import re
 
 # http://www.exiv2.org/tags-xmp-crs.html
@@ -21,17 +20,26 @@ class Image(object):
 
         self.cropTop = 0
         self.cropLeft = 0
-        self.cropHeight = 0
-        self.cropWidth = 0
+        self.cropHeight = height
+        self.cropWidth = width
         self.cropDegrees = 0
         self.hasCrop = 0
 
     def cropDpp(self, top, left, height, width, degrees):
-        self.cropTop = top
-        self.cropLeft = left
+        """
+        Set the image's crop settings.
+        The x,y and height and width are relative to the top left corner
+        of a bounding box around the original image
+        """
         self.cropHeight = height
         self.cropWidth = width
-        self.cropDegrees = float(degrees)
+        self.cropTop = top
+        self.cropLeft = left
+        self.cropDegrees = (float(degrees) + 360) % 360
+
+    def get_top_left_of_bounding(self):
+        # x_ = self.cropTop
+        pass
 
     def getXMPCrop(self):
         # rotate -45 to 45 degrees (True angle opposite sign from UI)
@@ -51,36 +59,57 @@ class Image(object):
         sin = math.sin(math.radians(self.cropDegrees))
         cos = math.cos(math.radians(self.cropDegrees))
 
-        bottomInPixels = self.cropTop + self.cropHeight
-        rightInPixels = self.cropLeft + self.cropWidth
+        yBottomRightAbsolute = self.cropTop + self.cropHeight
+        xBottonRightAbsolute = self.cropLeft + self.cropWidth
 
         # x, y -> coordinates, in pixels, of upper l corner of crop box,
         #  relative to center of crop box (and hence, center of rotation).
         xUpperLeft = -self.cropWidth / 2
         yUpperLeft = -self.cropHeight / 2
+        xUpperRight = self.cropWidth / 2
+        yUpperRight = -self.cropHeight / 2
+        # xLowerLeft = -self.cropWidth / 2
+        # yLowerLeft = self.cropHeight / 2
         xLowerRight = self.cropWidth / 2
         yLowerRight = self.cropHeight / 2
 
         # xT, yT -> angled coordinates, transformed according to angle, but
         # still relative to center of rotation/crop-box.
         xUpperLeftT = xUpperLeft * cos - yUpperLeft * sin
-        yUpperLeftT = xUpperLeft * sin + yUpperLeft * cos
+        # yUpperLeftT = xUpperLeft * sin + yUpperLeft * cos
+
+        # xUpperRightT = xUpperRight * cos - yUpperRight * sin
+        yUpperRightT = xUpperRight * sin + yUpperRight * cos
+
+        # xLowerLeftT = xLowerLeft * cos - yLowerLeft * sin
+        # yLowerLeftT = xLowerLeft * sin + yLowerLeft * cos
+
         xLowerRightT = xLowerRight * cos - yLowerRight * sin
         yLowerRightT = xLowerRight * sin + yLowerRight * cos
 
         # xP, yP -> angled coordinates, in pixels, relative to upper l corner
         # of image.
         cropLeftPixelsP = self.cropLeft + (xUpperLeftT - xUpperLeft)
-        cropTopPixelsP = self.cropTop + (yUpperLeftT - yUpperLeft)
-        cropRightPixelsP = rightInPixels + (xLowerRightT - xLowerRight)
-        cropBottomPixelsP = bottomInPixels + (yLowerRightT - yLowerRight)
+        cropTopPixelsP = self.cropTop + (yUpperRightT - yUpperLeft)
+        cropRightPixelsP = xBottonRightAbsolute + (xLowerRightT - xLowerRight)
+        cropBottomPixelsP = yBottomRightAbsolute + (yLowerRightT - yLowerRight)
 
         # final coordinates, as fractional values.
         left = cropLeftPixelsP / self.width
         top = cropTopPixelsP / self.height
+        top = self.cropTop / self.height
         right = cropRightPixelsP / self.width
         bottom = cropBottomPixelsP / self.height
-
+        if left < 0:
+            left = 0
+        if right > 1:
+            right = 1
+        if top < 0:
+            top = 0
+        if bottom > 1:
+            bottom = 1
+        print self.cropLeft, self.cropTop, self.cropLeft + self.cropWidth, self.cropTop + self.cropHeight
+        print cropLeftPixelsP, cropTopPixelsP, cropRightPixelsP, cropBottomPixelsP
         return top, left, bottom, right
 
 
@@ -370,10 +399,9 @@ CROP_MAPPINGS = {
     'Yes': True,
 }
 MAPPINGS = {
-    'CropAngle': set(['CanonVRD:AngleAdj', ]),
+    'CropAngle': set(['CanonVRD:AngleAdj']),
     'CropLeft': set(['CanonVRD:CropLeft']),
     'CropTop': set(['CanonVRD:CropTop']),
-    'CropRight': set(['CanonVRD:CropWidth']),
     'CropBottom': set(['CanonVRD:CropHeight']),
     'CropWidth': set(['CanonVRD:CropWidth']),
     'CropHeight': set(['CanonVRD:CropHeight']),
@@ -440,13 +468,17 @@ def process_metadata(metadata):
     for mapping, sources in MAPPINGS.items():
         found = False
         for source in sources:
-            if found:
-                continue
             if source in metadata:
                 metadata['crs:' + mapping] = metadata[source]
+                print source, metadata[source], '->', mapping, metadata['crs:' + mapping]
                 found = True
+                break
         if not found:
             print 'Not found: {} {}'.format(mapping, sources)
+
+    if 'crs:CropAngle' in metadata:
+        # the number is inverted for dpp versus xmp
+        metadata['crs:CropAngle'] *= -1
 
     if 'CanonVRD:WhiteBalanceAdj' in metadata:
         metadata['crs:WhiteBalance'] = WHITE_BALANCE_MAPPINGS[
@@ -542,7 +574,8 @@ def main(fileglobs):
                     f.write(output)
                     f.close()
                 else:
-                    pprint.pprint(metadata)
+                    # pprint.pprint(metadata)
+                    pass
 
 if __name__ == '__main__':
     import sys

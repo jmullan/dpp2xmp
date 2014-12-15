@@ -1,5 +1,5 @@
-# dpp2xmp <http://github.com/smarnach/dpp2xmp>
-# Copyright 2012 Sven Marnach
+# dpp2xmp <http://github.com/jmullan/dpp2xmp>
+# Copyright 2014 Jesse Muillan
 
 # This file is part of dpp2xmp.
 #
@@ -19,7 +19,7 @@
 from distutils.core import setup
 
 setup(name="dpp2xmp",
-      version="0.0",
+      version="0.0.1",
       description="Extract stuff from Digital Photo Professional into XMP",
       license="GPLv3+",
       author="Jesse Mullan",
