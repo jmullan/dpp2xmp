@@ -15,4 +15,4 @@
 # E502 the backslash is redundant between brackets
 ignore = E111,E121,E122,E123,E124,E125,E126,E127,E128,E261,E262,E265,E302,E501,E502
 max-line-length = 160
-exclude = exiftool
+exclude = src/exiftool.py
