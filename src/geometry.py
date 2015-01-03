@@ -45,6 +45,11 @@ class Vector(complex):
     def degrees(self):
         return math.degrees(self.radians)
 
+    def draw(self, canvas):
+        mid_x = canvas.winfo_width() / 2
+        mid_y = canvas.winfo_height() / 2
+        canvas.create_line(mid_x, mid_y, mid_x + self.real, mid_y - self.imag, fill="red", dash=(2, 2))
+
 
 class Point(Vector):
     """
@@ -76,6 +81,11 @@ class Point(Vector):
     def as_polar_degrees(self):
         return abs(self), self.degrees
 
+    def draw(self, canvas):
+        mid_x = canvas.winfo_width() / 2
+        mid_y = canvas.winfo_height() / 2
+        canvas.create_oval(mid_x + self.x, mid_y - self.y, mid_x + self.x + 1, mid_y - (self.y + 1))
+
 
 class Rotation(Vector):
     """
@@ -90,6 +100,12 @@ class Rotation(Vector):
         super(Rotation, self).__init__(*a, **kw)
         if abs(abs(self) - 1.0) > .0001 and cmath.phase(self) != 0:
             raise ValueError("norm must be 1")
+
+    def draw(self, canvas):
+        mid_x = canvas.winfo_width() / 2
+        mid_y = canvas.winfo_height() / 2
+        canvas.create_arc(mid_x - self.x, mid_y - self.y, mid_x + self.x, mid_y + self.y, start=0, extent=self.degrees)
+
 
 class RotationRadians(Rotation):
     """
@@ -119,105 +135,90 @@ class Rectangle(object):
     A rectangle, possibly angled, defined relative to the origin.
     """
 
-    def __init__(self, upper_left, lower_right, rotation):
+    def __init__(self, center, height, width, rotation):
         """
-        Instantiate a rectangle with two points and a rotation.
-        Upper left and lower right are arbitrary terms: they just have to be
-        opposite corners. The rotation is assumed to be the counter-clockwise
-        rotation of the whole rectangle. The two missing points can be defined
-        by reflecting the other two points over a line passing through the
-        center.
-        """
-        if not isinstance(upper_left, Point):
-            raise ValueError('upper_left must be a Point, was %r', upper_left)
-        if not isinstance(lower_right, Point):
-            raise ValueError('lower_right must be a Point, was %r', lower_right)
-        if not isinstance(rotation, Rotation):
-            raise ValueError('rotation must be a Rotation, was %r', rotation)
-        self.upper_left = upper_left
-        self.lower_right = lower_right
-        self.rotation = rotation
-
-    @classmethod
-    def new_from_center_plus_corner_vector(cls, center, corner_vector, rotation):
-        """
-        Returns a rectangle with the center at center and one corner
-        defined by the corner vector.
+        Instantiate a rectangle with two a height, width, and a rotation around
+        a center point. The rotation is assumed to be the counter-clockwise
+        rotation of the whole rectangle.
         """
         if not isinstance(center, Point):
             raise ValueError('center must be a Point, was %r', center)
-        if not isinstance(corner_vector, Vector):
-            raise ValueError('lower_right must be a Vector, was %r', corner_vector)
         if not isinstance(rotation, Rotation):
             raise ValueError('rotation must be a Rotation, was %r', rotation)
-        upper_left = center - corner_vector
-        lower_right = center + corner_vector
-        return Rectangle(upper_left, lower_right, rotation)
-
-    @property
-    def center(self):
-        """
-        A convenience method to find the center point of the rectangle.
-        """
-        return (self.upper_left + self.lower_right) / 2
+        self.center = center
+        self.height = abs(height)
+        self.width = abs(width)
+        self.rotation = rotation
 
     @property
     def diagonal(self):
         return self.upper_left - self.lower_right
 
+    def _corner(self, right, up):
+        cr = math.cos(self.rotation.radians)
+        sr = math.sin(self.rotation.radians)
+
+        x = right * cr - up * sr
+        y = right * sr + up * cr
+        point = Point(x, y)
+        return self.center + point
+
+    @property
+    def upper_left(self):
+        up = self.height / 2
+        right = self.width / 2
+        return self._corner(-right, up)
+
     @property
     def upper_right(self):
-        center = self.center
-        corner_vector = Vector(center - self.upper_left)
-        theta = RotationDegrees(2 * (self.rotation.degrees - corner_vector.degrees))
-        upper_right = center + (corner_vector * theta)
-        return upper_right
+        up = self.height / 2
+        right = self.width / 2
+        return self._corner(right, up)
+
+    @property
+    def lower_right(self):
+        up = self.height / 2
+        right = self.width / 2
+        return self._corner(right, -up)
 
     @property
     def lower_left(self):
-        center = self.center
-        corner_vector = center - self.upper_left
-        # don't judge me.
-        theta = RotationDegrees((self.rotation.degrees - corner_vector.degrees) * 2 + 180)
-        return center + (corner_vector * theta)
-
-    @property
-    def height(self):
-        return abs(self.upper_left - self.lower_left)
-
-    @property
-    def width(self):
-        return abs(self.upper_left - self.upper_right)
+        up = self.height / 2
+        right = self.width / 2
+        return self._corner(-right, -up)
 
     @property
     def hypotenuse(self):
         return abs(self.diagonal)
 
+    @property
+    def bounding_box(self):
+        points = self.as_points()
+        min_x = min([point.x for point in points])
+        min_y = min([point.y for point in points])
+        max_x = max([point.x for point in points])
+        max_y = max([point.y for point in points])
+        return Rectangle(self.center, max_y - min_y, max_x - min_x, RotationDegrees(0))
+
     def __repr__(self):
-        return "<Rectangle: Center %r, shape %r, rotation %r>" % (
-            self.center, self.upper_right, self.rotation.as_polar_degrees())
+        points = ', '.join(['%r' % p for p in self.as_points()])
+        return "<Rectangle: Center %r, height %r, width %r, rotation %r, points %s>" % (
+            self.center, self.height, self.width, self.rotation.degrees, points)
 
     def area(self):
-        vector = self.diagonal
-        return vector.x * vector.y
+        return self.height * self.width
 
     def as_points(self):
         return [
-            Point((p / 2 + self.center) * self.rotation)
-            for p in [
-                -self.upper_right,
-                Vector(-self.upper_right.x, self.upper_right.y),
-                self.upper_right,
-                Vector(self.upper_right.x, -self.upper_right.y)
-            ]
+            self.upper_left,
+            self.upper_right,
+            self.lower_right,
+            self.lower_left
         ]
 
     def translation(self, vector):
         # Quite trivial, pretty useless method
         self.center += Vector(vector)
-
-    def scale(self, factor):
-        self.upper_right *= float(factor)
 
     def rotate(self, rotation):
         self.rotation *= rotation
@@ -241,3 +242,14 @@ class Rectangle(object):
         self.center -= Point(point)
         self.rotate_from_origin(rotation)
         self.center += Point(point)
+
+    def draw(self, canvas):
+        mid_x = canvas.winfo_width() / 2
+        mid_y = canvas.winfo_height() / 2
+        canvas.create_line(
+            mid_x + self.upper_left.x, mid_y - self.upper_left.y,
+            mid_x + self.upper_right.x, mid_y - self.upper_right.y,
+            mid_x + self.lower_right.x, mid_y - self.lower_right.y,
+            mid_x + self.lower_left.x, mid_y - self.lower_left.y,
+            mid_x + self.upper_left.x, mid_y - self.upper_left.y
+        )

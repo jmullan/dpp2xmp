@@ -2,3 +2,5 @@
 *.bak
 *_flymake.py
 *.pyc
+# You should install this separately
+src/exiftool.py
